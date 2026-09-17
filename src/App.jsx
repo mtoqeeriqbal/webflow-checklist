@@ -7,6 +7,7 @@ import ReportModal from "./components/ReportModal";
 import PageManagerModal from "./components/PageManagerModal";
 import ConfirmModal from "./components/ConfirmModal";
 import ImportModal from "./components/ImportModal";
+import ChecklistSetupModal from "./components/ChecklistSetupModal";
 import Toast from "./components/Toast";
 import { useAuditState } from "./hooks/useAuditState";
 import { useToast } from "./hooks/useToast";
@@ -23,6 +24,7 @@ export default function App() {
 
   const [pageManagerOpen, setPageManagerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [checklistSetupOpen, setChecklistSetupOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportKind, setReportKind] = useState("page"); // "page" | "site"
   const [reportText, setReportText] = useState("");
@@ -53,7 +55,7 @@ export default function App() {
 
   const handleDownloadMd = () => {
     const project = safeFilenamePart(state.project) || "project";
-    saveTextFile(`seo_aeo_report_${project}_${currentSuffix()}.md`, reportText);
+    saveTextFile(`site_audit_${project}_${currentSuffix()}.md`, reportText);
     showToast("Report downloaded.");
   };
 
@@ -61,7 +63,7 @@ export default function App() {
     const project = safeFilenamePart(state.project) || "project";
     try {
       const blob = pdfFromReportText(reportText);
-      downloadBlob(`seo_aeo_report_${project}_${currentSuffix()}.pdf`, blob);
+      downloadBlob(`site_audit_${project}_${currentSuffix()}.pdf`, blob);
       showToast("PDF downloaded.");
     } catch (e) {
       showToast("Could not build the PDF in this browser.");
@@ -81,7 +83,7 @@ export default function App() {
     try {
       const blob = exportToXlsxBlob(state);
       const project = safeFilenamePart(state.project) || "export";
-      downloadBlob(`seo_aeo_audit_${project}.xlsx`, blob);
+      downloadBlob(`site_audit_${project}.xlsx`, blob);
       showToast("Spreadsheet downloading…");
     } catch (e) {
       showToast("Could not build the spreadsheet in this browser.");
@@ -104,6 +106,7 @@ export default function App() {
         onGenerateSiteReport={openSiteReport}
         onImport={() => setImportOpen(true)}
         onExportXlsx={handleExportXlsx}
+        onChecklistSetup={() => setChecklistSetupOpen(true)}
       />
 
       <ReportModal
@@ -132,6 +135,13 @@ export default function App() {
         onClose={() => setImportOpen(false)}
         onConfirm={requestConfirm}
         onToast={showToast}
+      />
+
+      <ChecklistSetupModal
+        open={checklistSetupOpen}
+        state={state}
+        dispatch={dispatch}
+        onClose={() => setChecklistSetupOpen(false)}
       />
 
       <ConfirmModal dialog={confirmDialog} onRespond={respondConfirm} />

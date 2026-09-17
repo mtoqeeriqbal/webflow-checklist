@@ -1,11 +1,12 @@
 import ChecklistItem from "./ChecklistItem";
-import { categoryApplicableTotal, categoryCheckedCount, getPage } from "../state/auditState";
+import { categoryApplicableTotal, categoryCheckedCount, getActiveCategoryItems, getPage } from "../state/auditState";
 
 export default function Category({ cat, state, dispatch }) {
   const page = getPage(state);
   const done = categoryCheckedCount(state, cat);
   const total = categoryApplicableTotal(state, cat);
   const isCollapsed = !!state.collapsed[cat.id];
+  const items = getActiveCategoryItems(state, cat);
 
   return (
     <div className={"category" + (isCollapsed ? " collapsed" : "")}>
@@ -17,14 +18,16 @@ export default function Category({ cat, state, dispatch }) {
         </div>
       </div>
       <div className="category-body">
-        {cat.items.map((item) => (
+        {items.map((item) => (
           <ChecklistItem
             key={item.id}
             item={item}
             isChecked={!!page.checked[item.id]}
             isNA={!!page.na[item.id]}
+            isHidden={!!page.hidden?.[item.id]}
             onToggle={() => dispatch({ type: "TOGGLE_ITEM", id: item.id })}
             onToggleNA={() => dispatch({ type: "TOGGLE_NA", id: item.id })}
+            onToggleHidden={() => dispatch({ type: "TOGGLE_HIDDEN", id: item.id })}
           />
         ))}
       </div>

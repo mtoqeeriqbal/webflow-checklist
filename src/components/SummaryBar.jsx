@@ -1,15 +1,15 @@
-import { DATA } from "../data/checklistData";
-import { applicableTotal, checkedCount, getPage } from "../state/auditState";
+import { applicableTotal, checkedCount, getActiveItems, getPage } from "../state/auditState";
 
 export default function SummaryBar({ state }) {
   const page = getPage(state);
   const total = applicableTotal(state);
   const done = checkedCount(state);
   const pct = total ? Math.round((done / total) * 100) : 0;
-  const highOpen = DATA.flatMap((c) => c.items).filter(
+  const activeItems = getActiveItems(state);
+  const highOpen = activeItems.filter(
     (it) => it.priority === "High" && !page.checked[it.id] && !page.na[it.id]
   ).length;
-  const naCount = Object.values(page.na).filter(Boolean).length;
+  const naCount = activeItems.filter((it) => page.na[it.id]).length;
 
   return (
     <div className="summary-bar">

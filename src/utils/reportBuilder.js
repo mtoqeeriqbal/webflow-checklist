@@ -1,22 +1,44 @@
-import { DATA } from "../data/checklistData";
-import { applicableTotal, checkedCount, categoryApplicableTotal, categoryCheckedCount } from "../state/auditState";
+import { getActiveCategories, getActiveCategoryItems } from "../state/auditState";
+
+// Items that count toward the *report* for this page: in-scope (category enabled,
+// tier allowed) AND not individually flagged "hide from report" on this page.
+// Note this is distinct from the app's own progress totals, which ignore the
+// "hidden" flag — hiding an item from the report doesn't stop tracking it in-app.
+function reportItemsForCategory(state, cat, pageId) {
+  const page = state.pages[pageId];
+  return getActiveCategoryItems(state, cat).filter((it) => !page.hidden?.[it.id]);
+}
+
+function reportItemsForPage(state, pageId) {
+  return getActiveCategories(state).flatMap((cat) => reportItemsForCategory(state, cat, pageId));
+}
+
+function reportTotals(state, pageId) {
+  const page = state.pages[pageId];
+  const items = reportItemsForPage(state, pageId);
+  const applicable = items.filter((it) => !page.na[it.id]).length;
+  const done = items.filter((it) => page.checked[it.id]).length;
+  return { applicable, done };
+}
 
 export function buildPageSection(state, pageId, headingLevel) {
   const page = state.pages[pageId];
   const h = "#".repeat(headingLevel);
-  const total = applicableTotal(state, pageId);
-  const done = checkedCount(state, pageId);
+  const { applicable: total, done } = reportTotals(state, pageId);
   const pct = total ? Math.round((done / total) * 100) : 0;
 
   let out = `${h} Page: ${page.name} (${done}/${total} — ${pct}%)\n\n`;
 
-  DATA.forEach((cat) => {
-    const catTotal = categoryApplicableTotal(state, cat, pageId);
-    const catDone = categoryCheckedCount(state, cat, pageId);
+  getActiveCategories(state).forEach((cat) => {
+    const catItems = reportItemsForCategory(state, cat, pageId);
+    if (!catItems.length) return;
+
+    const catTotal = catItems.filter((it) => !page.na[it.id]).length;
+    const catDone = catItems.filter((it) => page.checked[it.id]).length;
     out += `${h}# ${cat.name} (${catDone}/${catTotal})\n\n`;
-    const open = cat.items.filter((it) => !page.checked[it.id] && !page.na[it.id]);
-    const passed = cat.items.filter((it) => page.checked[it.id]);
-    const na = cat.items.filter((it) => page.na[it.id]);
+    const open = catItems.filter((it) => !page.checked[it.id] && !page.na[it.id]);
+    const passed = catItems.filter((it) => page.checked[it.id]);
+    const na = catItems.filter((it) => page.na[it.id]);
 
     if (open.length) {
       out += `**Outstanding items:**\n`;
@@ -44,7 +66,7 @@ export function buildPageSection(state, pageId, headingLevel) {
     }
   });
 
-  const highOpen = DATA.flatMap((c) => c.items).filter(
+  const highOpen = reportItemsForPage(state, pageId).filter(
     (it) => it.priority === "High" && !page.checked[it.id] && !page.na[it.id]
   );
   if (highOpen.length) {
@@ -61,7 +83,7 @@ export function buildReport(state) {
   const date = new Date().toISOString().slice(0, 10);
   const page = state.pages[state.activePageId];
 
-  let out = `# SEO + AEO Audit Report\n\n`;
+  let out = `# Site Audit Report\n\n`;
   out += `**Project:** ${project}\n`;
   out += `**Page:** ${page.name}\n`;
   out += `**Date:** ${date}\n\n`;
@@ -73,7 +95,7 @@ export function buildSiteReport(state) {
   const project = state.project || "Untitled project";
   const date = new Date().toISOString().slice(0, 10);
 
-  let out = `# SEO + AEO Full Site Audit Report\n\n`;
+  let out = `# Full Site Audit Report\n\n`;
   out += `**Project:** ${project}\n`;
   out += `**Date:** ${date}\n`;
   out += `**Pages audited:** ${state.pageOrder.length}\n\n`;
@@ -83,10 +105,9 @@ export function buildSiteReport(state) {
   out += `|---|---|---|---|\n`;
   state.pageOrder.forEach((pid) => {
     const p = state.pages[pid];
-    const total = applicableTotal(state, pid);
-    const done = checkedCount(state, pid);
+    const { applicable: total, done } = reportTotals(state, pid);
     const pct = total ? Math.round((done / total) * 100) : 0;
-    const highOpen = DATA.flatMap((c) => c.items).filter(
+    const highOpen = reportItemsForPage(state, pid).filter(
       (it) => it.priority === "High" && !p.checked[it.id] && !p.na[it.id]
     ).length;
     out += `| ${p.name} | ${done}/${total} | ${pct}% | ${highOpen} |\n`;

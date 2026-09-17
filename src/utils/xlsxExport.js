@@ -1,9 +1,9 @@
 import * as XLSX from "xlsx";
-import { DATA, ALL_ITEMS } from "../data/checklistData";
+import { getActiveCategories, getActiveCategoryItems } from "../state/auditState";
 
 const COL_HEADER_BG = "FF1F2937";
 const COL_HEADER_FG = "FFFFFFFF";
-const COL_CAT_FILLS = ["FF2563EB", "FF7C3AED", "FF059669", "FFD97706"];
+const COL_CAT_FILLS = ["FF2563EB", "FF7C3AED", "FF059669", "FFD97706", "FF0891B2"];
 const COL_PASS_BG = "FFD1FAE5";
 const COL_PASS_FG = "FF065F46";
 const COL_FAIL_BG = "FFFEE2E2";
@@ -12,6 +12,8 @@ const COL_NA_BG = "FFF3F4F6";
 const COL_NA_FG = "FF6B7280";
 const COL_OPEN_BG = "FFFEF3C7";
 const COL_OPEN_FG = "FF92400E";
+const COL_HIDDEN_BG = "FFE5E7EB";
+const COL_HIDDEN_FG = "FF9CA3AF";
 const COL_SUMMARY_BG = "FFEFF6FF";
 const COL_TITLE_BG = "FF111827";
 const COL_TITLE_FG = "FFFFFFFF";
@@ -30,10 +32,18 @@ function cellStyle(fgColor, bgColor, bold = false, wrapText = true, hAlign = "ce
   };
 }
 
+// The checklist scope (which categories/tiers are enabled) is project-wide, so it's
+// safe to build one shared set of columns for every page. Whether an individual item
+// is hidden "from report" is a per-page choice, so that's handled per-cell instead.
+function activeData(state) {
+  return getActiveCategories(state).map((cat) => ({ ...cat, items: getActiveCategoryItems(state, cat) }));
+}
+
 export function buildAuditWorkbook(state) {
   const project = state.project || "Audit";
   const wb = XLSX.utils.book_new();
-  const allItems = ALL_ITEMS;
+  const scopedData = activeData(state);
+  const allItems = scopedData.flatMap((cat) => cat.items.map((item) => ({ cat, item })));
   const totalCols = 3 + allItems.length + 4;
 
   // ── Sheet 1: Full Checklist Matrix ──
@@ -43,7 +53,7 @@ export function buildAuditWorkbook(state) {
   const setStyle = (r, c, style) => { wsCellStyles[`${r},${c}`] = style; };
 
   const titleRow = new Array(totalCols).fill(null);
-  titleRow[0] = `${project} — SEO + AEO Audit`;
+  titleRow[0] = `${project} — Audit`;
   wsData.push(titleRow);
   wsMerges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: totalCols - 1 } });
   for (let c = 0; c < totalCols; c++) {
@@ -53,7 +63,8 @@ export function buildAuditWorkbook(state) {
   const catGroupRow = new Array(totalCols).fill(null);
   catGroupRow[0] = ""; catGroupRow[1] = ""; catGroupRow[2] = "";
   let colCursor = 3;
-  DATA.forEach((cat, ci) => {
+  scopedData.forEach((cat, ci) => {
+    if (!cat.items.length) return;
     catGroupRow[colCursor] = cat.name;
     wsMerges.push({ s: { r: 1, c: colCursor }, e: { r: 1, c: colCursor + cat.items.length - 1 } });
     for (let c = colCursor; c < colCursor + cat.items.length; c++) {
@@ -112,27 +123,36 @@ export function buildAuditWorkbook(state) {
     const row = [pageIdx + 1, page.name, new Date().toISOString().slice(0, 10)];
     const rowIdx = dataStartRow + pageIdx;
 
+    let naCount = 0;
+    let checkedCount2 = 0;
+    let applicable = 0;
+
     allItems.forEach(({ item }, ci) => {
+      const isHidden = !!page.hidden?.[item.id];
       const isChecked = !!page.checked[item.id];
       const isNA = !!page.na[item.id];
       let val, style;
-      if (isChecked) {
+      if (isHidden) {
+        val = "Hidden";
+        style = cellStyle(COL_HIDDEN_FG, COL_HIDDEN_BG, false, false);
+      } else if (isChecked) {
         val = "Pass";
         style = cellStyle(COL_PASS_FG, COL_PASS_BG, false, false);
+        applicable += 1;
+        checkedCount2 += 1;
       } else if (isNA) {
         val = "N/A";
         style = cellStyle(COL_NA_FG, COL_NA_BG, false, false);
+        naCount += 1;
       } else {
         val = "Open";
         style = cellStyle(COL_OPEN_FG, COL_OPEN_BG, false, false);
+        applicable += 1;
       }
       row.push(val);
       setStyle(rowIdx, 3 + ci, style);
     });
 
-    const naCount = Object.values(page.na || {}).filter(Boolean).length;
-    const checkedCount2 = Object.values(page.checked || {}).filter(Boolean).length;
-    const applicable = allItems.length - naCount;
     const pct = applicable > 0 ? Math.round((checkedCount2 / applicable) * 100) : 0;
 
     row.push(checkedCount2, naCount, applicable, `${pct}%`);
@@ -196,12 +216,23 @@ export function buildAuditWorkbook(state) {
   ws2Data.push(s2Headers);
   s2Headers.forEach((_, c) => setS2(1, c, cellStyle(COL_HEADER_FG, COL_HEADER_BG, true, false, c < 2 ? "left" : "center")));
 
+  function pageTotals(page) {
+    let naCount = 0;
+    let checked = 0;
+    let applicable = 0;
+    allItems.forEach(({ item }) => {
+      if (page.hidden?.[item.id]) return;
+      if (page.checked[item.id]) { checked += 1; applicable += 1; }
+      else if (page.na[item.id]) { naCount += 1; }
+      else { applicable += 1; }
+    });
+    return { naCount, checked, applicable };
+  }
+
   state.pageOrder.forEach((pid, i) => {
     const page = state.pages[pid];
     if (!page) return;
-    const naCount = Object.values(page.na || {}).filter(Boolean).length;
-    const checked = Object.values(page.checked || {}).filter(Boolean).length;
-    const applicable = allItems.length - naCount;
+    const { naCount, checked, applicable } = pageTotals(page);
     const pct = applicable > 0 ? Math.round((checked / applicable) * 100) : 0;
     const pctStr = `${pct}%`;
 
@@ -221,15 +252,16 @@ export function buildAuditWorkbook(state) {
     ));
   });
 
+  const categoriesWithItems = scopedData.filter((cat) => cat.items.length);
   const breakStartRow = 2 + state.pageOrder.length + 2;
   ws2Data.push([]);
-  ws2Data.push(["Category Breakdown", "", "", ...DATA.map((c) => c.name), ""]);
+  ws2Data.push(["Category Breakdown", "", "", ...categoriesWithItems.map((c) => c.name), ""]);
   ws2Merges.push({ s: { r: breakStartRow, c: 0 }, e: { r: breakStartRow, c: 2 } });
-  for (let c = 0; c < 3 + DATA.length; c++) {
+  for (let c = 0; c < 3 + categoriesWithItems.length; c++) {
     setS2(breakStartRow, c, cellStyle(COL_HEADER_FG, COL_HEADER_BG, true, false, c < 3 ? "left" : "center"));
   }
 
-  const breakHeaders2 = ["#", "Page / URL", "Audit Date", ...DATA.map(() => "% Done")];
+  const breakHeaders2 = ["#", "Page / URL", "Audit Date", ...categoriesWithItems.map(() => "% Done")];
   ws2Data.push(breakHeaders2);
   const bhr2 = breakStartRow + 1;
   breakHeaders2.forEach((_, c) => setS2(bhr2, c, cellStyle(COL_HEADER_FG, COL_HEADER_BG, true, false, c < 3 ? "left" : "center")));
@@ -237,9 +269,10 @@ export function buildAuditWorkbook(state) {
   state.pageOrder.forEach((pid, i) => {
     const page = state.pages[pid];
     if (!page) return;
-    const catPcts = DATA.map((cat) => {
-      const applicable2 = cat.items.filter((it) => !page.na[it.id]).length;
-      const checked2 = cat.items.filter((it) => page.checked[it.id]).length;
+    const catPcts = categoriesWithItems.map((cat) => {
+      const visibleItems = cat.items.filter((it) => !page.hidden?.[it.id]);
+      const applicable2 = visibleItems.filter((it) => !page.na[it.id]).length;
+      const checked2 = visibleItems.filter((it) => page.checked[it.id]).length;
       return applicable2 > 0 ? `${Math.round((checked2 / applicable2) * 100)}%` : "—";
     });
     const r = breakStartRow + 2 + i;
@@ -275,11 +308,14 @@ export function buildAuditWorkbook(state) {
     ["Pass", "Item checked off — confirmed OK for this page"],
     ["Open", "Not yet audited — needs attention"],
     ["N/A", "Marked not applicable — excluded from score"],
+    ["Hidden", "Hidden from reports on this page — excluded from score"],
     ["", ""],
-    ["% Complete", "= Checked ÷ Applicable (N/A items excluded from denominator)"],
+    ["% Complete", "= Checked ÷ Applicable (N/A and Hidden items excluded from denominator)"],
     ["Green %", "80% or above"],
     ["Yellow %", "50–79%"],
     ["Red %", "Below 50%"],
+    ["", ""],
+    ["Note", "Only checklist categories/tiers enabled for this project are included in this export."],
   ];
   const ws3 = XLSX.utils.aoa_to_sheet(legendData);
   const legendStyles = {
@@ -291,6 +327,8 @@ export function buildAuditWorkbook(state) {
     "2,1": cellStyle("FF1F2937", "FFFFFFFF", false, true, "left"),
     "3,0": cellStyle(COL_NA_FG, COL_NA_BG, true, false, "center"),
     "3,1": cellStyle("FF1F2937", "FFFFFFFF", false, true, "left"),
+    "4,0": cellStyle(COL_HIDDEN_FG, COL_HIDDEN_BG, true, false, "center"),
+    "4,1": cellStyle("FF1F2937", "FFFFFFFF", false, true, "left"),
   };
   Object.entries(legendStyles).forEach(([key, style]) => {
     const [r, c] = key.split(",").map(Number);

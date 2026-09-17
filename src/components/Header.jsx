@@ -3,8 +3,8 @@ import PageBar from "./PageBar";
 export default function Header({ state, dispatch, onManagePages, onReset }) {
   return (
     <header>
-      <h1>SEO + AEO Audit Checklist</h1>
-      <p className="sub">Check off items as you audit the site. Progress saves automatically in this browser.</p>
+      <h1>Site Audit &amp; Launch Checklist</h1>
+      <p className="sub">Check off items as you audit or launch the site. Progress saves automatically in this browser.</p>
       <div className="project-row">
         <input
           type="text"

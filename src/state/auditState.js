@@ -1,4 +1,4 @@
-import { TOTAL_ITEMS } from "../data/checklistData";
+import { DATA } from "../data/checklistData";
 
 export const STORAGE_KEY = "seo_aeo_audit_state_v2";
 const OLD_STORAGE_KEY = "seo_aeo_audit_state_v1";
@@ -7,14 +7,20 @@ export function makePageId() {
   return "page_" + Math.random().toString(36).slice(2, 10);
 }
 
+function emptyPage(name) {
+  return { name, checked: {}, na: {}, hidden: {} };
+}
+
 export function defaultState() {
   const id = makePageId();
   return {
     project: "",
     activePageId: id,
     pageOrder: [id],
-    pages: { [id]: { name: "/ (Homepage)", checked: {}, na: {} } },
+    pages: { [id]: emptyPage("/ (Homepage)") },
     collapsed: {},
+    enabledCategories: {},
+    showAdvancedSeo: true,
   };
 }
 
@@ -26,7 +32,10 @@ export function loadState() {
       if (parsed && parsed.pages && parsed.activePageId) {
         Object.values(parsed.pages).forEach((p) => {
           if (!p.na) p.na = {};
+          if (!p.hidden) p.hidden = {};
         });
+        if (!parsed.enabledCategories) parsed.enabledCategories = {};
+        if (typeof parsed.showAdvancedSeo !== "boolean") parsed.showAdvancedSeo = true;
         return parsed;
       }
     }
@@ -38,8 +47,10 @@ export function loadState() {
         project: old.project || "",
         activePageId: id,
         pageOrder: [id],
-        pages: { [id]: { name: "/ (Homepage)", checked: old.checked || {}, na: {} } },
+        pages: { [id]: { name: "/ (Homepage)", checked: old.checked || {}, na: {}, hidden: {} } },
         collapsed: old.collapsed || {},
+        enabledCategories: {},
+        showAdvancedSeo: true,
       };
     }
   } catch (e) {
@@ -60,28 +71,59 @@ export function getPage(state, pageId) {
   return state.pages[pageId || state.activePageId];
 }
 
+// ---------- Checklist scope (category / tier) ----------
+
+export function isCategoryEnabled(state, catId) {
+  return state.enabledCategories?.[catId] !== false;
+}
+
+export function showsAdvancedSeo(state) {
+  return state.showAdvancedSeo !== false;
+}
+
+export function isItemActive(state, item) {
+  if (item.tier === "advanced" && !showsAdvancedSeo(state)) return false;
+  return true;
+}
+
+export function getActiveCategories(state) {
+  return DATA.filter((cat) => isCategoryEnabled(state, cat.id));
+}
+
+export function getActiveCategoryItems(state, cat) {
+  return cat.items.filter((it) => isItemActive(state, it));
+}
+
+export function getActiveItems(state) {
+  return getActiveCategories(state).flatMap((cat) => getActiveCategoryItems(state, cat));
+}
+
+// ---------- Progress stats (scope-aware, ignores "hidden from report") ----------
+
 export function applicableTotal(state, pageId) {
   const page = getPage(state, pageId);
-  if (!page) return TOTAL_ITEMS;
-  return TOTAL_ITEMS - Object.values(page.na).filter(Boolean).length;
+  const items = getActiveItems(state);
+  if (!page) return items.length;
+  return items.filter((it) => !page.na[it.id]).length;
 }
 
 export function checkedCount(state, pageId) {
   const page = getPage(state, pageId);
   if (!page) return 0;
-  return Object.values(page.checked).filter(Boolean).length;
+  return getActiveItems(state).filter((it) => page.checked[it.id]).length;
 }
 
 export function categoryApplicableTotal(state, cat, pageId) {
   const page = getPage(state, pageId);
-  if (!page) return cat.items.length;
-  return cat.items.filter((it) => !page.na[it.id]).length;
+  const items = getActiveCategoryItems(state, cat);
+  if (!page) return items.length;
+  return items.filter((it) => !page.na[it.id]).length;
 }
 
 export function categoryCheckedCount(state, cat, pageId) {
   const page = getPage(state, pageId);
   if (!page) return 0;
-  return cat.items.filter((it) => page.checked[it.id]).length;
+  return getActiveCategoryItems(state, cat).filter((it) => page.checked[it.id]).length;
 }
 
 export function auditReducer(state, action) {
@@ -110,6 +152,12 @@ export function auditReducer(state, action) {
       return { ...state, pages: { ...state.pages, [state.activePageId]: nextPage } };
     }
 
+    case "TOGGLE_HIDDEN": {
+      const page = getPage(state);
+      const nextPage = { ...page, hidden: { ...page.hidden, [action.id]: !page.hidden[action.id] } };
+      return { ...state, pages: { ...state.pages, [state.activePageId]: nextPage } };
+    }
+
     case "TOGGLE_COLLAPSE":
       return { ...state, collapsed: { ...state.collapsed, [action.catId]: !state.collapsed[action.catId] } };
 
@@ -118,6 +166,15 @@ export function auditReducer(state, action) {
       action.catIds.forEach((id) => { collapsed[id] = action.value; });
       return { ...state, collapsed };
     }
+
+    case "SET_CATEGORY_ENABLED":
+      return { ...state, enabledCategories: { ...state.enabledCategories, [action.catId]: action.value } };
+
+    case "SET_SHOW_ADVANCED_SEO":
+      return { ...state, showAdvancedSeo: action.value };
+
+    case "APPLY_CHECKLIST_PRESET":
+      return { ...state, enabledCategories: { ...action.enabledCategories }, showAdvancedSeo: action.showAdvancedSeo };
 
     case "RENAME_PAGE": {
       const page = state.pages[action.pageId];
@@ -134,7 +191,12 @@ export function auditReducer(state, action) {
         ...state,
         pages: {
           ...state.pages,
-          [newId]: { name: page.name + " (copy)", checked: { ...page.checked }, na: { ...page.na } },
+          [newId]: {
+            name: page.name + " (copy)",
+            checked: { ...page.checked },
+            na: { ...page.na },
+            hidden: { ...page.hidden },
+          },
         },
         pageOrder: [...state.pageOrder, newId],
         activePageId: newId,
@@ -154,8 +216,8 @@ export function auditReducer(state, action) {
       const id = makePageId();
       const src = action.sourcePageId ? state.pages[action.sourcePageId] : null;
       const newPage = src
-        ? { name: action.name, checked: { ...src.checked }, na: { ...src.na } }
-        : { name: action.name, checked: {}, na: {} };
+        ? { name: action.name, checked: { ...src.checked }, na: { ...src.na }, hidden: { ...src.hidden } }
+        : emptyPage(action.name);
       return {
         ...state,
         pages: { ...state.pages, [id]: newPage },
@@ -180,14 +242,14 @@ export function auditReducer(state, action) {
         );
         if (!targetPid) {
           targetPid = makePageId();
-          pages[targetPid] = { name: p.name, checked: {}, na: {} };
+          pages[targetPid] = emptyPage(p.name);
           pageOrder = [...pageOrder, targetPid];
         }
         const checked = {};
         p.checkedIds.forEach((id) => { checked[id] = true; });
         const na = {};
         p.naIds.forEach((id) => { na[id] = true; });
-        pages[targetPid] = { ...pages[targetPid], checked, na };
+        pages[targetPid] = { ...pages[targetPid], checked, na, hidden: pages[targetPid].hidden || {} };
         if (!firstImportedId) firstImportedId = targetPid;
       });
 
